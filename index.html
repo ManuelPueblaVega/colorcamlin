@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Color Sound Camera</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            font-family: Arial, sans-serif;
+        }
+        #container {
+            position: relative;
+            width: 100%;
+            height: 100%;
+        }
+        #videoElement, #canvasElement {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        #line {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 2px;
+            height: 100%;
+            background-color: red;
+            opacity: 0.5;
+            transition: left 0.1s linear;
+        }
+        #toggleButton, #switchCameraButton, #debugButton {
+            position: absolute;
+            bottom: 20px;
+            padding: 10px 20px;
+            font-size: 16px;
+            cursor: pointer;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 5px;
+        }
+        #toggleButton {
+            left: 20px;
+        }
+        #switchCameraButton {
+            right: 20px;
+        }
+        #debugButton {
+            left: 50%;
+            transform: translateX(-50%);
+        }
+        #debugInfo {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background-color: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 10px;
+            border-radius: 5px;
+            font-size: 14px;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <video id="videoElement" autoplay playsinline></video>
+        <canvas id="canvasElement"></canvas>
+        <div id="line"></div>
+        <button id="toggleButton">Iniciar</button>
+        <button id="switchCameraButton">Cambiar Cámara</button>
+        <button id="debugButton">Debug</button>
+        <div id="debugInfo"></div>
+    </div>
+
+    <script>
+        const videoElement = document.getElementById('videoElement');
+        const canvasElement = document.getElementById('canvasElement');
+        const lineElement = document.getElementById('line');
+        const toggleButton = document.getElementById('toggleButton');
+        const switchCameraButton = document.getElementById('switchCameraButton');
+        const debugButton = document.getElementById('debugButton');
+        const debugInfo = document.getElementById('debugInfo');
+        const ctx = canvasElement.getContext('2d');
+
+        let isPlaying = false;
+        let linePosition = 0;
+        let currentCameraFacing = 'user';
+        let audioContext;
+        let isDebugMode = false;
+
+        const boomwhackerColors = [
+            { color: 'red', note: 'C', frequency: 261.63 },
+            { color: 'orange', note: 'D', frequency: 293.66 },
+            { color: 'yellow', note: 'E', frequency: 329.63 },
+            { color: 'green', note: 'F', frequency: 349.23 },
+            { color: 'lightblue', note: 'G', frequency: 392.00 },
+            { color: 'blue', note: 'A', frequency: 440.00 },
+            { color: 'purple', note: 'B', frequency: 493.88 }
+        ];
+
+        async function startCamera() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { facingMode: currentCameraFacing } 
+                });
+                videoElement.srcObject = stream;
+            } catch (err) {
+                console.error("Error accessing the camera:", err);
+                alert("Error al acceder a la cámara: " + err.message);
+            }
+        }
+
+        function initAudio() {
+            audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        }
+
+        function playNote(frequency) {
+            if (!audioContext) {
+                initAudio();
+            }
+            const oscillator = audioContext.createOscillator();
+            const gainNode = audioContext.createGain();
+            oscillator.type = 'sine';
+            oscillator.frequency.setValueAtTime(frequency, audioContext.currentTime);
+            oscillator.connect(gainNode);
+            gainNode.connect(audioContext.destination);
+            gainNode.gain.setValueAtTime(0, audioContext.currentTime);
+            gainNode.gain.linearRampToValueAtTime(1, audioContext.currentTime + 0.01);
+            oscillator.start();
+            gainNode.gain.exponentialRampToValueAtTime(0.001, audioContext.currentTime + 0.5);
+            oscillator.stop(audioContext.currentTime + 0.5);
+        }
+
+        function isColorSimilar(detectedColor, targetColor) {
+            const rgbToHsl = (r, g, b) => {
+                r /= 255, g /= 255, b /= 255;
+                const max = Math.max(r, g, b), min = Math.min(r, g, b);
+                let h, s, l = (max + min) / 2;
+                if (max === min) {
+                    h = s = 0;
+                } else {
+                    const d = max - min;
+                    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+                    switch (max) {
+                        case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+                        case g: h = (b - r) / d + 2; break;
+                        case b: h = (r - g) / d + 4; break;
+                    }
+                    h /= 6;
+                }
+                return [h, s, l];
+            };
+
+            const [r, g, b] = detectedColor.match(/\d+/g).map(Number);
+            const [h, s, l] = rgbToHsl(r, g, b);
+
+            const colorToHue = {
+                red: 0, orange: 0.08, yellow: 0.17, green: 0.33,
+                lightblue: 0.5, blue: 0.67, purple: 0.75
+            };
+
+            const hueThreshold = 0.08;
+            const targetHue = colorToHue[targetColor];
+
+            return Math.abs(h - targetHue) < hueThreshold && s > 0.3 && l > 0.2 && l < 0.8;
+        }
+
+        function detectColorAndPlaySound() {
+            ctx.drawImage(videoElement, 0, 0, canvasElement.width, canvasElement.height);
+            const imageData = ctx.getImageData(linePosition, 0, 1, canvasElement.height);
+            const data = imageData.data;
+
+            let detectedColor = null;
+            let matchedColor = null;
+
+            for (let i = 0; i < data.length; i += 4) {
+                const r = data[i];
+                const g = data[i + 1];
+                const b = data[i + 2];
+
+                detectedColor = `rgb(${r},${g},${b})`;
+                matchedColor = boomwhackerColors.find(c => isColorSimilar(detectedColor, c.color));
+
+                if (matchedColor) {
+                    playNote(matchedColor.frequency);
+                    break;
+                }
+            }
+
+            if (isDebugMode) {
+                debugInfo.innerHTML = `
+                    Posición: ${linePosition}<br>
+                    Color detectado: ${detectedColor}<br>
+                    Color coincidente: ${matchedColor ? matchedColor.color : 'Ninguno'}
+                `;
+            }
+
+            linePosition = (linePosition + 1) % canvasElement.width;
+            lineElement.style.left = `${linePosition}px`;
+
+            if (isPlaying) {
+                requestAnimationFrame(detectColorAndPlaySound);
+            }
+        }
+
+        function togglePlay() {
+            isPlaying = !isPlaying;
+            if (isPlaying) {
+                startCamera();
+                toggleButton.textContent = 'Detener';
+                detectColorAndPlaySound();
+            } else {
+                toggleButton.textContent = 'Iniciar';
+                if (videoElement.srcObject) {
+                    videoElement.srcObject.getTracks().forEach(track => track.stop());
+                }
+            }
+        }
+
+        async function switchCamera() {
+            if (videoElement.srcObject) {
+                videoElement.srcObject.getTracks().forEach(track => track.stop());
+            }
+            currentCameraFacing = currentCameraFacing === 'user' ? 'environment' : 'user';
+            await startCamera();
+        }
+
+        function toggleDebug() {
+            isDebugMode = !isDebugMode;
+            debugInfo.style.display = isDebugMode ? 'block' : 'none';
+            debugButton.textContent = isDebugMode ? 'Ocultar Debug' : 'Mostrar Debug';
+        }
+
+        function resizeCanvas() {
+            canvasElement.width = window.innerWidth;
+            canvasElement.height = window.innerHeight;
+        }
+
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        toggleButton.addEventListener('click', togglePlay);
+        switchCameraButton.addEventListener('click', switchCamera);
+        debugButton.addEventListener('click', toggleDebug);
+
+        // Inicializar el contexto de audio al primer clic o toque
+        document.addEventListener('click', initAudio, { once: true });
+        document.addEventListener('touchstart', initAudio, { once: true });
+    </script>
+</body>
+</html>
